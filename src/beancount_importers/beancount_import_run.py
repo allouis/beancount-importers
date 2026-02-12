@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 
+import importlib
 import os
 from pathlib import Path
 
@@ -11,6 +12,18 @@ from uabean.importers import binance, ibkr, kraken, monobank
 import beancount_importers.import_monzo as import_monzo
 import beancount_importers.import_revolut as import_revolut
 import beancount_importers.import_wise as import_wise
+
+try:
+    from smart_importer import PredictPostings
+except ImportError:
+    PredictPostings = None
+
+
+def _wrap_smart_importer(importer):
+    """Wrap an importer with smart_importer predictions if available."""
+    if PredictPostings is not None:
+        return PredictPostings().wrap(importer)
+    return importer
 
 
 def get_importer_config(type, account, currency, importer_params):
@@ -86,6 +99,15 @@ def get_importer_config(type, account, currency, importer_params):
             importer=binance.Importer(**(importer_params or {})),
             emoji="🎰"
         )
+    elif type == "custom":
+        module_name = importer_params["module"]
+        mod = importlib.import_module(module_name)
+        return dict(
+            **common,
+            module="beancount_import.source.generic_importer_source_beangulp",
+            importer=mod.get_importer(account, currency, importer_params),
+            emoji="🔧"
+        )
     else:
         return None
 
@@ -95,14 +117,18 @@ def load_import_config_from_file(filename, data_dir, output_dir):
         parsed_config = yaml.safe_load(config_file)
         data_sources = []
         for key, params in parsed_config["importers"].items():
+            importer_config = get_importer_config(
+                params["importer"],
+                params.get("account"),
+                params.get("currency"),
+                params.get("params"),
+            )
+            importer_config["importer"] = _wrap_smart_importer(
+                importer_config["importer"]
+            )
             config = dict(
                 directory=os.path.join(data_dir, key),
-                **get_importer_config(
-                    params["importer"],
-                    params.get("account"),
-                    params.get("currency"),
-                    params.get("params"),
-                )
+                **importer_config,
             )
             data_sources.append(config)
         return dict(
